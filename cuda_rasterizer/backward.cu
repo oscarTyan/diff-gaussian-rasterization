@@ -16,6 +16,9 @@
 #include <cooperative_groups/reduce.h>
 namespace cg = cooperative_groups;
 
+__device__ __forceinline__ int idxUT(int a,int b){ return a*(a+1)/2 + b; } // Upper-Triangular（上三角）
+
+
 // Backward pass for conversion of spherical harmonics to RGB for
 // each Gaussian.
 __device__ void computeColorFromSH(int idx, int deg, int max_coeffs, const glm::vec3* means, glm::vec3 campos, const float* shs, const bool* clamped, const glm::vec3* dL_dcolor, glm::vec3* dL_dmeans, glm::vec3* dL_dshs,  float *dL_dtau)
@@ -437,7 +440,9 @@ __global__ void preprocessCUDA(
 	float* dL_dsh,
 	glm::vec3* dL_dscale,
 	glm::vec4* dL_drot,
-	float *dL_dtau)
+	float *dL_dtau,
+	float *dJTJ,
+	float *g)
 {
 	auto idx = cg::this_grid().thread_rank();
 	if (idx >= P || !(radii[idx] > 0))
@@ -536,6 +541,23 @@ __global__ void preprocessCUDA(
 	// Compute gradient updates due to computing covariance from scale/rotation
 	if (scales)
 		computeCov3D(idx, scales[idx], scale_modifier, rotations[idx], dL_dcov3D, dL_dscale, dL_drot);
+
+	// -----------  累加 g 与 Hessian  ----------------
+	float Ji[6];
+	#pragma unroll
+	for (int k=0;k<6;++k) Ji[k] = dL_dt[k];      // 当前像素对 τ 的梯度
+
+	// 一阶：g += Ji
+	#pragma unroll
+	for (int k=0;k<6;++k)
+		atomicAdd(&g[k], Ji[k]);
+
+	// 二阶：H += Ji ⊗ Ji  (上三角 21 项)
+	#pragma unroll
+	for (int a=0;a<6;++a)
+		for (int b=0;b<=a;++b)
+			atomicAdd(&dJTJ[idxUT(a,b)], Ji[a]*Ji[b]);
+
 }
 
 template <typename T>
@@ -811,7 +833,9 @@ void BACKWARD::preprocess(
 	float* dL_dsh,
 	glm::vec3* dL_dscale,
 	glm::vec4* dL_drot,
-	float* dL_dtau)
+	float* dL_dtau,
+	float *dJTJ,
+	float *g)
 {
 	// Propagate gradients for the path of 2D conic matrix computation. 
 	// Somewhat long, thus it is its own kernel rather than being part of 
@@ -856,7 +880,9 @@ void BACKWARD::preprocess(
 		dL_dsh,
 		dL_dscale,
 		dL_drot,
-		dL_dtau);
+		dL_dtau,
+		dJTJ,
+		g);
 }
 
 void BACKWARD::render(

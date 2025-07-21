@@ -65,7 +65,9 @@ namespace BACKWARD
 		float* dL_dsh,
 		glm::vec3* dL_dscale,
 		glm::vec4* dL_drot,
-		float* dL_dtau);
+		float* dL_dtau,
+		float* dJTJ,   // ← 上三角 21 项
+		float* g);     // ← 6 项);
 }
 
 #endif
